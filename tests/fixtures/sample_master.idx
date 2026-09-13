@@ -1,0 +1,8 @@
+Description:           Representative SEC master-index fixture
+Last Data Received:    September 10, 2026
+
+CIK|Company Name|Form Type|Date Filed|Filename
+0000320193|Apple Inc.|10-K|2026-01-31|edgar/data/320193/0000320193-26-000001.txt
+0000789019|Microsoft Corporation|10-Q|2026-04-30|edgar/data/789019/0000789019-26-000002.txt
+0001652044|Alphabet Inc.|8-K|2026-05-01|edgar/data/1652044/0001652044-26-000003.txt
+0000320193|Apple Inc.|4|2026-05-02|edgar/data/320193/0000320193-26-000004.txt
