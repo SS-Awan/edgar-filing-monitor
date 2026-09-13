@@ -18,6 +18,8 @@ on:
 permissions:
   actions: read
   contents: read
+  pages: write
+  id-token: write
 
 jobs:
   ingest:
@@ -75,6 +77,20 @@ jobs:
             python -m edgar_monitor.cli --scheduled --lookback-days "$LOOKBACK_DAYS"
           fi
 
+      - name: Generate dashboard data
+        if: success()
+        run: python scripts/build_dashboard_data.py
+
+      - name: Configure GitHub Pages
+        if: success()
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: success()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
       - name: Upload curated state artifact
         if: always()
         uses: actions/upload-artifact@v5
@@ -92,3 +108,13 @@ jobs:
           path: data/raw
           if-no-files-found: warn
           retention-days: 30
+
+  deploy:
+    needs: ingest
+    if: needs.ingest.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
