@@ -78,6 +78,47 @@ def merge_filing_records(
     )
 
 
+def read_partitioned_parquet(
+    input_directory: Path,
+) -> tuple[FilingRecord, ...]:
+    """Read a previously written partitioned Parquet dataset."""
+    parquet_files = list(input_directory.rglob("*.parquet"))
+    if not parquet_files:
+        return ()
+
+    parquet_glob = str(input_directory / "**" / "*.parquet").replace("\\", "/")
+
+    with duckdb.connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                cik,
+                company_name,
+                form_type,
+                filing_date,
+                filename,
+                accession_number,
+                source_line_number
+            FROM read_parquet(?)
+            ORDER BY filing_date, accession_number
+            """,
+            [parquet_glob],
+        ).fetchall()
+
+    return tuple(
+        FilingRecord(
+            cik=row[0],
+            company_name=row[1],
+            form_type=row[2],
+            filing_date=row[3],
+            filename=row[4],
+            accession_number=row[5],
+            source_line_number=row[6],
+        )
+        for row in rows
+    )
+
+
 def write_partitioned_parquet(
     records: tuple[FilingRecord, ...],
     output_directory: Path,

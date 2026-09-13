@@ -5,6 +5,7 @@ import duckdb
 
 from edgar_monitor.curation import (
     merge_filing_records,
+    read_partitioned_parquet,
     select_target_filings,
     write_partitioned_parquet,
 )
@@ -86,3 +87,17 @@ def test_write_partitioned_parquet_creates_queryable_output(tmp_path: Path) -> N
 
     assert result is not None
     assert result[0] == 2
+
+
+def test_read_partitioned_parquet_restores_curated_records(tmp_path: Path) -> None:
+    output_directory = tmp_path / "curated"
+    original_records = (
+        make_record("0000320193-26-000001", form_type="8-K"),
+        make_record("0000320193-26-000002", form_type="10-Q"),
+    )
+
+    write_partitioned_parquet(original_records, output_directory)
+
+    restored_records = read_partitioned_parquet(output_directory)
+
+    assert restored_records == original_records
