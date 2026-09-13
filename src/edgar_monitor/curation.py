@@ -1,5 +1,4 @@
 """Select, merge, and store curated EDGAR filing records."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ TARGET_FORM_TYPES = frozenset({"10-K", "10-Q", "8-K"})
 
 @dataclass(frozen=True)
 class MergeMetrics:
-    """Counts produced by one accession-number merge operation."""
+    """Counts produced while merging incoming records into curated state."""
 
     inserted: int
     updated: int
@@ -23,26 +22,38 @@ class MergeMetrics:
 
 @dataclass(frozen=True)
 class MergeResult:
-    """Canonical records and metrics after an idempotent merge."""
+    """Canonical curated records and their merge metrics."""
 
     records: tuple[FilingRecord, ...]
     metrics: MergeMetrics
 
 
+def filing_identity(record: FilingRecord) -> tuple[str, str]:
+    """Return the EDGAR index identity for one company-filing relationship.
+
+    An accession number can legitimately appear under multiple CIKs when one
+    filing is associated with related legal entities. Therefore, accession
+    number alone is not a safe unique key for the daily master index.
+    """
+    return record.cik, record.accession_number
+
+
 def select_target_filings(
     records: tuple[FilingRecord, ...],
 ) -> tuple[FilingRecord, ...]:
-    """Keep only the filing forms represented by this project."""
-    return tuple(record for record in records if record.form_type in TARGET_FORM_TYPES)
+    """Keep only the filing types monitored by this pipeline."""
+    return tuple(
+        record for record in records if record.form_type in TARGET_FORM_TYPES
+    )
 
 
 def merge_filing_records(
     existing_records: tuple[FilingRecord, ...],
     incoming_records: tuple[FilingRecord, ...],
 ) -> MergeResult:
-    """Merge records by accession number without creating duplicates."""
-    records_by_accession = {
-        record.accession_number: record for record in existing_records
+    """Merge records idempotently using CIK plus accession number."""
+    records_by_identity = {
+        filing_identity(record): record for record in existing_records
     }
 
     inserted = 0
@@ -50,26 +61,31 @@ def merge_filing_records(
     unchanged = 0
 
     for incoming_record in incoming_records:
-        existing_record = records_by_accession.get(incoming_record.accession_number)
+        identity = filing_identity(incoming_record)
+        existing_record = records_by_identity.get(identity)
 
         if existing_record is None:
-            records_by_accession[incoming_record.accession_number] = incoming_record
+            records_by_identity[identity] = incoming_record
             inserted += 1
         elif existing_record.model_dump() == incoming_record.model_dump():
             unchanged += 1
         else:
-            records_by_accession[incoming_record.accession_number] = incoming_record
+            records_by_identity[identity] = incoming_record
             updated += 1
 
-    canonical_records = tuple(
+    merged_records = tuple(
         sorted(
-            records_by_accession.values(),
-            key=lambda record: (record.filing_date, record.accession_number),
+            records_by_identity.values(),
+            key=lambda record: (
+                record.filing_date,
+                record.cik,
+                record.accession_number,
+            ),
         )
     )
 
     return MergeResult(
-        records=canonical_records,
+        records=merged_records,
         metrics=MergeMetrics(
             inserted=inserted,
             updated=updated,
@@ -81,14 +97,15 @@ def merge_filing_records(
 def read_partitioned_parquet(
     input_directory: Path,
 ) -> tuple[FilingRecord, ...]:
-    """Read a previously written partitioned Parquet dataset."""
+    """Restore curated filing records from partitioned Parquet state."""
     parquet_files = list(input_directory.rglob("*.parquet"))
+
     if not parquet_files:
         return ()
 
-    parquet_glob = str(input_directory / "**" / "*.parquet").replace("\\", "/")
+    parquet_glob = (input_directory / "**" / "*.parquet").as_posix()
 
-    with duckdb.connect() as connection:
+    with duckdb.connect(database=":memory:") as connection:
         rows = connection.execute(
             """
             SELECT
@@ -100,7 +117,7 @@ def read_partitioned_parquet(
                 accession_number,
                 source_line_number
             FROM read_parquet(?)
-            ORDER BY filing_date, accession_number
+            ORDER BY filing_date, cik, accession_number
             """,
             [parquet_glob],
         ).fetchall()
@@ -123,11 +140,12 @@ def write_partitioned_parquet(
     records: tuple[FilingRecord, ...],
     output_directory: Path,
 ) -> None:
-    """Write curated records to Parquet partitions with DuckDB."""
+    """Write curated records as Parquet partitioned by year and form type."""
     if not records:
         raise ValueError("Cannot write an empty curated dataset.")
 
     output_directory.mkdir(parents=True, exist_ok=True)
+    output_path = output_directory.as_posix().replace("'", "''")
 
     rows = [
         (
@@ -143,9 +161,7 @@ def write_partitioned_parquet(
         for record in records
     ]
 
-    escaped_output_directory = str(output_directory.resolve()).replace("'", "''")
-
-    with duckdb.connect() as connection:
+    with duckdb.connect(database=":memory:") as connection:
         connection.execute(
             """
             CREATE TABLE filings (
@@ -168,7 +184,7 @@ def write_partitioned_parquet(
         )
         connection.execute(
             f"""
-            COPY filings TO '{escaped_output_directory}'
+            COPY filings TO '{output_path}'
             (
                 FORMAT PARQUET,
                 PARTITION_BY (filing_year, form_type),
