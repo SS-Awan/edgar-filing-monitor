@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EDGAR Filing Monitor</title>
+    <meta
+      name="description"
+      content="Pipeline health and filing activity from the EDGAR Filing Monitor."
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero">
+        <p class="eyebrow">Data engineering pipeline</p>
+        <h1>EDGAR Filing Monitor</h1>
+        <p class="hero-copy">
+          A monitored SEC filing-index pipeline with validation, quarantine,
+          idempotent loading, raw-source provenance, and artifact-based state.
+        </p>
+
+        <div class="status-row">
+          <span id="run-status" class="status-badge">Loading pipeline status</span>
+          <span id="generated-at" class="generated-at"></span>
+        </div>
+      </section>
+
+      <section class="metric-grid" aria-label="Pipeline metrics">
+        <article class="metric-card">
+          <p>Curated relationships</p>
+          <strong id="curated-relationships">—</strong>
+          <span>CIK + accession-number records</span>
+        </article>
+
+        <article class="metric-card">
+          <p>Unique companies</p>
+          <strong id="unique-companies">—</strong>
+          <span>Companies represented in curated state</span>
+        </article>
+
+        <article class="metric-card">
+          <p>Latest source rows</p>
+          <strong id="raw-rows">—</strong>
+          <span>Rows received in the latest run</span>
+        </article>
+
+        <article class="metric-card">
+          <p>Latest quarantined</p>
+          <strong id="quarantined-records">—</strong>
+          <span>Invalid records isolated from curated state</span>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Curated output</p>
+              <h2>Filings by form type</h2>
+            </div>
+            <span id="date-range" class="panel-note"></span>
+          </div>
+          <div id="form-type-chart" class="bar-chart"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Ingestion trend</p>
+              <h2>Target filings by date</h2>
+            </div>
+          </div>
+          <div id="filing-date-chart" class="bar-chart"></div>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Latest run</p>
+              <h2>Pipeline observability</h2>
+            </div>
+          </div>
+          <dl id="latest-run-details" class="detail-list"></dl>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Downstream analysis</p>
+              <h2>Most active companies</h2>
+            </div>
+          </div>
+          <ol id="top-companies" class="company-list"></ol>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Recovery history</p>
+            <h2>Recent pipeline runs</h2>
+          </div>
+          <span class="panel-note">Run ledger retained outside Git</span>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Planned</th>
+                <th>Validated</th>
+                <th>Quarantined</th>
+                <th>Inserted</th>
+                <th>Unchanged</th>
+              </tr>
+            </thead>
+            <tbody id="recent-runs"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="architecture-note">
+        <h2>What this dashboard represents</h2>
+        <p>
+          SEC daily index → checksum-addressed raw snapshot → schema validation
+          and quarantine → composite-key merge → partitioned Parquet state →
+          DuckDB dashboard query → static deployment.
+        </p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
