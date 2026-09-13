@@ -1,0 +1,94 @@
+name: Scheduled EDGAR pipeline
+
+on:
+  schedule:
+    - cron: "17 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Optional scheduled run date in YYYY-MM-DD format"
+        required: false
+        type: string
+      lookback_days:
+        description: "Business-day lookback length"
+        required: false
+        default: "7"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Restore latest curated state artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf restored-state
+          if gh run download --repo "$GITHUB_REPOSITORY" --name edgar-pipeline-state --dir restored-state; then
+            mkdir -p data
+            rm -rf data/state
+            mv restored-state data/state
+          else
+            echo "No earlier curated-state artifact found; starting from empty state."
+          fi
+
+      - name: Restore latest raw snapshot artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf restored-raw
+          if gh run download --repo "$GITHUB_REPOSITORY" --name edgar-raw-snapshots --dir restored-raw; then
+            mkdir -p data
+            rm -rf data/raw
+            mv restored-raw data/raw
+          else
+            echo "No earlier raw-snapshot artifact found; starting fresh."
+          fi
+
+      - name: Run scheduled SEC pipeline
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          RUN_DATE: ${{ github.event.inputs.run_date }}
+          LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '7' }}
+        run: |
+          if [ -n "$RUN_DATE" ]; then
+            python -m edgar_monitor.cli --scheduled --run-date "$RUN_DATE" --lookback-days "$LOOKBACK_DAYS"
+          else
+            python -m edgar_monitor.cli --scheduled --lookback-days "$LOOKBACK_DAYS"
+          fi
+
+      - name: Upload curated state artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: edgar-pipeline-state
+          path: data/state
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload raw snapshot artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: edgar-raw-snapshots
+          path: data/raw
+          if-no-files-found: warn
+          retention-days: 30
