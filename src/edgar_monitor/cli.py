@@ -28,11 +28,7 @@ def promote_curated_state(
     next_curated_directory: Path,
     curated_directory: Path,
 ) -> bool:
-    """Replace curated state only after a successful pipeline run.
-
-    The previous state is temporarily retained as a rollback copy while the
-    replacement directory is promoted.
-    """
+    """Replace curated state only after a successful pipeline run."""
     if not next_curated_directory.exists():
         return False
 
@@ -55,6 +51,20 @@ def promote_curated_state(
             shutil.rmtree(rollback_directory)
 
     return True
+
+
+def print_run_summary(run_record: object, promoted: bool) -> None:
+    """Print the fields recorded by the pipeline run ledger."""
+    model_dump = getattr(run_record, "model_dump")
+    summary = model_dump(mode="json")
+
+    print("\nPipeline run summary")
+    print("-" * 40)
+
+    for field_name, value in summary.items():
+        print(f"{field_name}: {value}")
+
+    print(f"curated_state_promoted: {promoted}")
 
 
 def run_local_pipeline(
@@ -94,19 +104,7 @@ def run_local_pipeline(
     elif next_curated_directory.exists():
         shutil.rmtree(next_curated_directory)
 
-    print(f"Run ID: {result.run_record.run_id}")
-    print(f"Status: {result.run_record.status}")
-    print(f"Raw rows: {result.run_record.raw_row_count}")
-    print(f"Validated rows: {result.run_record.validated_row_count}")
-    print(f"Quarantined rows: {result.run_record.quarantined_row_count}")
-    print(f"Target filings: {result.run_record.target_filing_count}")
-    print(f"Inserted: {result.run_record.inserted_count}")
-    print(f"Updated: {result.run_record.updated_count}")
-    print(f"Unchanged: {result.run_record.unchanged_count}")
-    print(f"Curated state promoted: {promoted}")
-
-    if result.run_record.error_message:
-        print(f"Error: {result.run_record.error_message}")
+    print_run_summary(result.run_record, promoted)
 
     return 0 if result.run_record.status == "succeeded" else 1
 
