@@ -11,6 +11,7 @@ from pathlib import Path
 
 from edgar_monitor.curation import read_partitioned_parquet
 from edgar_monitor.pipeline import run_pipeline
+from edgar_monitor.scheduling import build_scheduled_source_plan
 from edgar_monitor.sec_client import create_sec_client
 
 
@@ -67,13 +68,13 @@ def print_run_summary(run_record: object, promoted: bool) -> None:
     print(f"curated_state_promoted: {promoted}")
 
 
-def run_local_pipeline(
-    source_date: date,
+def run_dates_pipeline(
+    source_dates: tuple[date, ...],
     user_agent: str,
     state_directory: Path,
     run_id: str | None = None,
 ) -> int:
-    """Run one SEC source date and safely promote successful curated state."""
+    """Run one or more SEC source dates and safely promote curated state."""
     state_directory.mkdir(parents=True, exist_ok=True)
 
     curated_directory = state_directory / "curated"
@@ -88,7 +89,7 @@ def run_local_pipeline(
 
     with create_sec_client(user_agent) as client:
         result = run_pipeline(
-            source_dates=(source_date,),
+            source_dates=source_dates,
             client=client,
             existing_records=existing_records,
             output_directory=next_curated_directory,
@@ -111,16 +112,75 @@ def run_local_pipeline(
     return 0 if result.run_record.status == "succeeded" else 1
 
 
+def run_local_pipeline(
+    source_date: date,
+    user_agent: str,
+    state_directory: Path,
+    run_id: str | None = None,
+) -> int:
+    """Run one manually selected SEC source date."""
+    return run_dates_pipeline(
+        source_dates=(source_date,),
+        user_agent=user_agent,
+        state_directory=state_directory,
+        run_id=run_id,
+    )
+
+
+def run_scheduled_pipeline(
+    run_date: date,
+    user_agent: str,
+    state_directory: Path,
+    lookback_days: int,
+) -> int:
+    """Run the rolling lookback plus previously failed source dates."""
+    ledger_path = state_directory / "run_ledger.jsonl"
+    plan = build_scheduled_source_plan(
+        run_date=run_date,
+        ledger_path=ledger_path,
+        lookback_days=lookback_days,
+    )
+
+    planned_dates = ", ".join(
+        source_date.isoformat() for source_date in plan.source_dates
+    )
+    print(f"Scheduled source dates: {planned_dates}")
+
+    return run_dates_pipeline(
+        source_dates=plan.source_dates,
+        user_agent=user_agent,
+        state_directory=state_directory,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
-        description="Run the EDGAR Filing Monitor for one SEC daily index date."
+        description="Run the EDGAR Filing Monitor."
+    )
+
+    run_mode = parser.add_mutually_exclusive_group(required=True)
+    run_mode.add_argument(
+        "--source-date",
+        type=parse_source_date,
+        help="Run one SEC daily index date in YYYY-MM-DD format.",
+    )
+    run_mode.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Run the rolling business-day lookback plan.",
+    )
+
+    parser.add_argument(
+        "--run-date",
+        type=parse_source_date,
+        help="Date used to calculate a scheduled lookback.",
     )
     parser.add_argument(
-        "--source-date",
-        required=True,
-        type=parse_source_date,
-        help="SEC daily-index date in YYYY-MM-DD format.",
+        "--lookback-days",
+        type=int,
+        default=7,
+        help="Business days included in a scheduled run. Default: 7.",
     )
     parser.add_argument(
         "--state-dir",
@@ -143,10 +203,18 @@ def main() -> int:
             "your contact email before running the pipeline."
         )
 
-    return run_local_pipeline(
-        source_date=arguments.source_date,
+    if arguments.source_date is not None:
+        return run_local_pipeline(
+            source_date=arguments.source_date,
+            user_agent=user_agent,
+            state_directory=arguments.state_dir,
+        )
+
+    return run_scheduled_pipeline(
+        run_date=arguments.run_date or date.today(),
         user_agent=user_agent,
         state_directory=arguments.state_dir,
+        lookback_days=arguments.lookback_days,
     )
 
 
