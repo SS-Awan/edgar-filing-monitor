@@ -1,20 +1,31 @@
-"""Orchestrate one complete EDGAR Filing Monitor pipeline run."""
-
+"""Orchestrate SEC ingestion, validation, curation, and observability."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
 
 import httpx
 
-from edgar_monitor.curation import MergeResult, merge_filing_records, select_target_filings
-from edgar_monitor.index_parser import MasterIndexFormatError, parse_master_index
+from edgar_monitor.curation import (
+    MergeResult,
+    merge_filing_records,
+    select_target_filings,
+    write_partitioned_parquet,
+)
+from edgar_monitor.index_parser import (
+    MasterIndexFormatError,
+    parse_master_index,
+)
 from edgar_monitor.models import FilingRecord, QuarantineRecord
 from edgar_monitor.observability import (
     PipelineRunRecord,
     append_run_record,
+)
+from edgar_monitor.raw_storage import (
+    DEFAULT_RAW_RETENTION_DAYS,
+    prune_raw_snapshots,
+    write_raw_snapshot,
 )
 from edgar_monitor.sec_client import (
     FetchedSource,
@@ -22,12 +33,11 @@ from edgar_monitor.sec_client import (
     fetch_daily_master_index,
 )
 from edgar_monitor.validation import validate_raw_rows
-from edgar_monitor.curation import write_partitioned_parquet
 
 
 @dataclass(frozen=True)
 class PipelineRunResult:
-    """Outputs produced by one complete pipeline run."""
+    """Outputs retained from one pipeline run."""
 
     run_record: PipelineRunRecord
     fetched_sources: tuple[FetchedSource, ...]
@@ -42,38 +52,63 @@ def run_pipeline(
     output_directory: Path,
     ledger_path: Path,
     run_id: str,
+    raw_directory: Path | None = None,
+    raw_retention_days: int = DEFAULT_RAW_RETENTION_DAYS,
+    retention_today: date | None = None,
 ) -> PipelineRunResult:
-    """Fetch, parse, validate, curate, store, and record one pipeline run."""
+    """Run the filing-monitor pipeline for one or more SEC source dates."""
     started_at = datetime.now(UTC)
     fetched_sources: list[FetchedSource] = []
-    validated_records: list[FilingRecord] = []
+    valid_records: list[FilingRecord] = []
     quarantined_rows: list[QuarantineRecord] = []
     errors: list[str] = []
-    raw_row_count = 0
+    succeeded_dates = 0
+    failed_dates = 0
 
     for source_date in source_dates:
         try:
             fetched_source = fetch_daily_master_index(source_date, client)
+            fetched_sources.append(fetched_source)
+
+            if raw_directory is not None:
+                write_raw_snapshot(fetched_source, raw_directory)
+
             document = parse_master_index(fetched_source.payload)
-        except (SourceFetchError, MasterIndexFormatError) as error:
-            errors.append(f"{source_date}: {error}")
-            continue
+            validated_records, source_quarantine = validate_raw_rows(
+                document.rows
+            )
 
-        fetched_sources.append(fetched_source)
-        raw_row_count += len(document.rows)
+            valid_records.extend(validated_records)
+            quarantined_rows.extend(source_quarantine)
+            succeeded_dates += 1
 
-        valid_rows, rejected_rows = validate_raw_rows(document.rows)
-        validated_records.extend(valid_rows)
-        quarantined_rows.extend(rejected_rows)
+        except (
+            SourceFetchError,
+            MasterIndexFormatError,
+            ValueError,
+        ) as error:
+            failed_dates += 1
+            errors.append(f"{source_date.isoformat()}: {error}")
 
-    target_records = select_target_filings(tuple(validated_records))
+    if raw_directory is not None:
+        prune_raw_snapshots(
+            raw_directory,
+            today=retention_today or date.today(),
+            retention_days=raw_retention_days,
+        )
+
+    target_records = select_target_filings(tuple(valid_records))
     merge_result = merge_filing_records(existing_records, target_records)
 
     if merge_result.records:
-        write_partitioned_parquet(merge_result.records, output_directory)
+        write_partitioned_parquet(
+            merge_result.records,
+            output_directory,
+        )
 
     finished_at = datetime.now(UTC)
-    status: Literal["succeeded", "failed"] = "failed" if errors else "succeeded"
+    status = "succeeded" if not errors else "failed"
+    error_message = "; ".join(errors) if errors else None
 
     run_record = PipelineRunRecord(
         run_id=run_id,
@@ -81,16 +116,16 @@ def run_pipeline(
         started_at=started_at,
         finished_at=finished_at,
         source_dates_planned=len(source_dates),
-        source_dates_succeeded=len(fetched_sources),
-        source_dates_failed=len(errors),
-        raw_rows=raw_row_count,
-        validated_records=len(validated_records),
+        source_dates_succeeded=succeeded_dates,
+        source_dates_failed=failed_dates,
+        raw_rows=len(valid_records) + len(quarantined_rows),
+        validated_records=len(valid_records),
         quarantined_records=len(quarantined_rows),
         target_records=len(target_records),
         inserted_records=merge_result.metrics.inserted,
         updated_records=merge_result.metrics.updated,
         unchanged_records=merge_result.metrics.unchanged,
-        error_message="; ".join(errors) if errors else None,
+        error_message=error_message,
     )
     append_run_record(ledger_path, run_record)
 

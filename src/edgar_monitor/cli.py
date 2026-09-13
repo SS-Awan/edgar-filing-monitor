@@ -79,6 +79,7 @@ def run_local_pipeline(
     curated_directory = state_directory / "curated"
     next_curated_directory = state_directory / "next_curated"
     ledger_path = state_directory / "run_ledger.jsonl"
+    raw_directory = state_directory.parent / "raw"
 
     if next_curated_directory.exists():
         shutil.rmtree(next_curated_directory)
@@ -93,6 +94,7 @@ def run_local_pipeline(
             output_directory=next_curated_directory,
             ledger_path=ledger_path,
             run_id=run_id or str(uuid.uuid4()),
+            raw_directory=raw_directory,
         )
 
     promoted = False
